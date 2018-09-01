@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <pthread.h>
 
+#include "timef.h"
 #include "log.h"
 #include "portaudio.h"
 
@@ -40,9 +41,10 @@ struct sigaction sa;
 void cleanup();
 void printOptions();
 
-OpusEncoder *oe;
+//OpusEncoder *oe;
+struct txDest * txDestList=NULL;
 
-ogg_stream_state os;
+//ogg_stream_state os;
 ogg_packet op;
 ogg_page og;
 ogg_int64_t packetno=0;
@@ -63,13 +65,12 @@ int arg_rtp=0;
 int arg_port=MC_PORT;
 int arg_streamSerial=12345;
 int c;
-struct in_addr arg_dst;
 
 unsigned char * encodedBuffer=0;
-unsigned char * txbuffer=0;
+unsigned char * txBuffer=0;
 
-struct sockaddr_in addr;
-int addrlen, sock, cnt;
+//struct sockaddr_in addr;
+//int addrlen, sock, cnt;
 struct ip_mreq mreq;
 
 PaStream *stream;
@@ -97,24 +98,6 @@ typedef int PaStreamCallback( const void *input,
 		const PaStreamCallbackTimeInfo* timeInfo,
 		PaStreamCallbackFlags statusFlags,
 		void *userData ) ;
-
-
-void timespec_diff(struct timespec *start, struct timespec *stop,
-		struct timespec *result)
-{
-	if ((stop->tv_nsec - start->tv_nsec) < 0) {
-		result->tv_sec = stop->tv_sec - start->tv_sec - 1;
-		result->tv_nsec = stop->tv_nsec - start->tv_nsec + 1000000000;
-	} else {
-		result->tv_sec = stop->tv_sec - start->tv_sec;
-		result->tv_nsec = stop->tv_nsec - start->tv_nsec;
-	}
-	return;
-}
-
-uint64_t timespec_to_uint64(struct timespec input) {
-	return (input.tv_sec*1e09)+input.tv_nsec;
-}
 
 
 int getAudioDevicesCount(int * nDevices) {
@@ -149,18 +132,18 @@ void setupAppControlSocket() {
 	app_addrlen = sizeof(app_addr);
 }
 
-void setupSocket() {
+void control_setupStreamingSocket(int * sock, struct sockaddr_in * addr, int * addrlen, struct in_addr * sender_dst) {
 	/* set up socket */
-	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock < 0) {
-		perror("socket");
+	*sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (*sock < 0) {
+		log_error("socket setup failure (setupSocket)");
 		exit(1);
 	}
-	bzero((char *)&addr, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr = arg_dst;
-	addr.sin_port = htons(arg_port);
-	addrlen = sizeof(addr);
+	bzero((char *)addr, sizeof(*addr));
+	addr->sin_family = AF_INET;
+	addr->sin_addr = *sender_dst;
+	addr->sin_port = htons(MC_PORT);
+	*addrlen = sizeof(*addr);
 }
 
 void  printAudioDevices() {
@@ -172,14 +155,6 @@ void  printAudioDevices() {
 		log_info("Device No: %i:%s",i,device->name);
 	}
 
-}
-
-uint64_t getSecondsSinceMidnight(struct tm * tm) {
-	uint64_t rc=
-		(tm->tm_sec 		+
-		 (tm->tm_min * 60)	+
-		 (tm->tm_hour * 3600));
-	return rc;
 }
 
 struct sockaddr_in control_addr;
@@ -235,24 +210,181 @@ control_parseMessage(char * buf,int bufSize, int * pnArgs,char *(*pArgs)[]) {
 	(*pnArgs)=nArgs;
 }
 
-void control_announce(char * sender) {
+struct txDest {
+	OpusEncoder *oe;
+	ogg_stream_state os;
+
+	int serial;
+	int bitrate;
+	int pagesize;
+	char dest[64];	
+
+	unsigned char * encodedBuffer;
+	unsigned char * txBuffer;
+
+	struct sockaddr_in addr;
+	struct in_addr sender_dst;
+
+	int addrlen;
+	int sock; 
+	int cnt;
+	
+	// ok we are doing a linked list.
+
+	struct txDest * next;
+	struct txDest * prior;
+};
+
+
+struct txDest * control_getLastTxDest(struct txDest * first) {
+	while (first->next!=NULL)
+		first++;
+	return first;
+}
+
+struct txDest * control_getTxDestByDest(struct txDest * first, const char * dest) {
+	while (first!=NULL) {
+		if (strcmp(first->dest,dest)==0) 
+			return first;
+		first=first->next;
+	}
+	return NULL;
+}
+
+struct txDest * control_addTxDestToEnd(struct txDest ** llist, char * dest,int bitrate,int serial) {
+	uint8_t oerr;
+	int oeErr;
+
+
+	struct txDest * td=calloc(sizeof(struct txDest),1);
+	log_debug ("creating Dest element %0x for linked list for serial %u to dest %s at bitrate %u",td,serial,dest,bitrate);
+
+	td->oe=opus_encoder_create(SAMPLE_RATE,2,OPUS_APPLICATION_AUDIO,&oeErr);
+	oerr=opus_encoder_init(td->oe,SAMPLE_RATE,2,OPUS_APPLICATION_AUDIO);
+	oerr=opus_encoder_ctl(td->oe,OPUS_SET_PACKET_LOSS_PERC(OPUS_PACKETLOSS));
+	oerr=opus_encoder_ctl(td->oe,OPUS_SET_BITRATE(bitrate));
+	if (ogg_stream_init(&td->os,serial)==-1) {
+		log_error("ogg_stream_init failed for serial %u",serial);
+	}
+
+	td->encodedBuffer=calloc(sizeof(char),ENCODED_BUFFER_SIZE);
+	td->txBuffer=calloc(sizeof(char),TXBUFFER_SIZE);
+
+	td->serial = serial;
+	td->bitrate = bitrate;
+	td->pagesize = 0;
+
+	strncpy(td->dest,dest,64);
+	inet_aton(dest,&td->sender_dst);
+
+	control_setupStreamingSocket(&td->sock, &td->addr, &td->addrlen, &td->sender_dst);
+
+	td->next=NULL;
+
+	if (txDestList==NULL) {
+		(*llist)=td; 
+		td->prior=NULL;
+	} else {
+		td->prior=control_getLastTxDest(*llist); 
+		td->prior->next=td;
+	}	
+
+	return td;	
+}
+
+void
+control_removeTxDest(struct txDest ** llist, struct txDest * td) {
+	
+	log_debug("removing element %0x from the Dest linked list",td);
+
+	struct txDest * next=td->next;
+	struct txDest * prior=td->prior;
+
+	// first one
+	if (td->prior==NULL) {
+		if (td->next == NULL)
+			(*llist)=NULL;
+		else {
+			td->next->prior=NULL;
+			(*llist)=td->next;
+		}
+	// not the first one
+	} else {
+		if (td->next==NULL)  {
+			td->prior->next=NULL;
+		} else {
+			td->prior->next=td->next;
+			td->next->prior=td->prior;
+		}
+	}
+
+	ogg_stream_clear(&td->os);
+	log_debug("done with ogg_stream_clear");
+	opus_encoder_destroy(td->oe);
+	log_debug("done with opus_encoder_destroy");
+
+	free(td->txBuffer);
+	log_debug("done freeing txbuffer");
+	free(td->encodedBuffer);
+	log_debug("done freeing encode buffer");
+
+	// this is causing an error.
+	//ogg_stream_destroy(&td->os);
+	//log_debug("done with ogg_stream_destroy");
+
+	free(td);
+	log_debug("done freeing Dest Structure");
+}
+
+void control_announce(int nArgs, char *(*pArgs)[],char * sender) {
 	log_info("inside Control:Announce command function. responding to %s",sender);
 
 	inet_aton(sender,&app_in_addr);
 	app_addr.sin_addr = app_in_addr;
 	
 	sendto(app_sock,"hellofromme",11,0,(struct sockaddr *) &app_addr,app_addrlen);
-
-
 }
+
+void control_send(int nArgs, char *(*pArgs)[], char * sender) {
+	log_info("inside Control:Send command function. responding to %s",sender);
+	char * dest=(*pArgs)[1];
+	int bitrate=atoi((*pArgs)[2]);
+	int serial=atoi((*pArgs)[3]);
+	control_addTxDestToEnd(&txDestList, dest,bitrate,serial);
+}
+
+void control_stop(int nArgs, char *(*pArgs)[], char * sender) {
+	log_info("inside Control:Stop command function. responding to %s",sender);
+	char * dest=(*pArgs)[1];
+	struct txDest * td=control_getTxDestByDest(txDestList,dest);
+	if (td)
+		control_removeTxDest(&txDestList,td) ;
+	else
+		log_error("TX Dest Structure not found for %s",dest);
+}
+
+struct control_cmd {
+	const char * cmd;
+	void (*cmd_fn)(int,char *(*)[],char*);
+};
+
+struct control_cmd control_cmds[]={
+	{"ANNOUNCE",control_announce},
+	{"SEND",control_send},
+	{"STOP",control_stop}
+};
+int control_cmds_size=3;
 
 void
 control_processMessage(int nArgs,char *(*pArgs)[],char * sender) {
 	if (nArgs==0)
 		return;
-	if (nArgs==1) {
-		if (strcmp((*pArgs)[0],"ANNOUNCE")==0) {
-			control_announce(sender);
+
+	log_debug("processing message from %s",sender);
+
+	for (int i=0;i<control_cmds_size;i++) {
+		if (strcmp((*pArgs)[0],control_cmds[i].cmd)==0) {
+			(*control_cmds[i].cmd_fn)(nArgs,pArgs,sender);
 		}
 	}
 }
@@ -272,6 +404,7 @@ void * control_thread_function(void * args) {
 	char * Args[16]; //will end up as pointers within control_receive_buffer
 
 	log_info("Control Thread Started");
+	
 	while (1) {
 
 		to.tv_sec=1;
@@ -292,7 +425,7 @@ void * control_thread_function(void * args) {
 		for (int i=0;i<nArgs;i++) {
 			log_info("Command %u is %s len %u",i,Args[i],strlen(Args[i]));
 		}
-		log_info("inside control_thread_function with %0x",Args);
+		//log_info("inside control_thread_function with %0x",Args);
 		control_processMessage(nArgs,&Args,inet_ntoa(control_addr.sin_addr));
 	}
 }
@@ -342,7 +475,7 @@ static int paCallback( const void *inputBuffer, void *outputBuffer,
 			if (callbackTime>ssm) {
 				paCallbackRunning=1;
 				ssm=callbackTime;
-				ssmSamples=callbackTime*48000;
+				ssmSamples=callbackTime*SAMPLE_RATE;
 				log_info("Stream Transmitting....");
 			} else
 				return 0;
@@ -353,29 +486,39 @@ static int paCallback( const void *inputBuffer, void *outputBuffer,
 
 		ssmSamples+=framesPerBuffer;
 
-		memset(encodedBuffer,0,ENCODED_BUFFER_SIZE);
-		memset(txbuffer,0,TXBUFFER_SIZE);
-		memset(&op,0,sizeof(ogg_packet));
+		struct txDest * txDestList_iterator=txDestList;
 
-		oBufSize=opus_encode_float(oe,(const float *)inputBuffer,framesPerBuffer,encodedBuffer,ENCODED_BUFFER_SIZE);
+		while (txDestList_iterator != NULL) {
+
+			memset(txDestList_iterator->encodedBuffer,0,ENCODED_BUFFER_SIZE);
+			memset(txDestList_iterator->txBuffer,0,TXBUFFER_SIZE);
+			memset(&op,0,sizeof(ogg_packet));
+
+			oBufSize=opus_encode_float(txDestList_iterator->oe,(const float *)inputBuffer,framesPerBuffer,txDestList_iterator->encodedBuffer,ENCODED_BUFFER_SIZE);
+
+			op.packet=txDestList_iterator->encodedBuffer;
+			op.bytes=oBufSize;
+			op.b_o_s=(packetno==0?1:0);
+			op.e_o_s=0;
+			op.granulepos=ssmSamples;
+			op.packetno=packetno++;
+
+			ogg_stream_packetin(&txDestList_iterator->os,&op);
+			txDestList_iterator->pagesize = ((txDestList_iterator->pagesize+1) % arg_pagesize);
+
+			if (txDestList_iterator->pagesize == 0 && ogg_stream_flush(&txDestList_iterator->os,&og)) {
+				memcpy(txDestList_iterator->txBuffer,og.header,og.header_len);
+				memcpy(txDestList_iterator->txBuffer+og.header_len,og.body,og.body_len);
+				sendto(txDestList_iterator->sock,txDestList_iterator->txBuffer,og.header_len+og.body_len,0,(struct sockaddr *) &txDestList_iterator->addr,txDestList_iterator->addrlen);
+			}
+
+			txDestList_iterator=txDestList_iterator->next;
+		}
+
 
 		//gpos+=framesPerBuffer;
 
-		op.packet=encodedBuffer;
-		op.bytes=oBufSize;
-		op.b_o_s=(packetno==0?1:0);
-		op.e_o_s=0;
-		op.granulepos=ssmSamples;
-		op.packetno=packetno++;
 
-		ogg_stream_packetin(&os,&op);
-		pagesize = ((pagesize+1) % arg_pagesize);
-
-		if (pagesize == 0 && ogg_stream_flush(&os,&og)) {
-			memcpy(txbuffer,og.header,og.header_len);
-			memcpy(txbuffer+og.header_len,og.body,og.body_len);
-			sendto(sock,txbuffer,og.header_len+og.body_len,0,(struct sockaddr *) &addr,addrlen);
-		}
 	}
 
 	return 0;
@@ -408,7 +551,7 @@ int main(int argc,char *argv[]) {
 	int oeErr;
 	int opt;
 
-	inet_aton(MC_GROUP,&arg_dst); // destination IP. we use strncpy to avoid buffer overrun.
+	//inet_aton(MC_GROUP,&arg_dst); // destination IP. we use strncpy to avoid buffer overrun.
 
 	while ((opt = getopt(argc, argv, "hlf:d:o:e:g:r:s:t:")) != -1) {
 		switch (opt) {
@@ -422,19 +565,19 @@ int main(int argc,char *argv[]) {
 				arg_device = atoi(optarg);
 				break;
 			case 't': //destination ip
-				inet_aton(optarg,&arg_dst);
+				//inet_aton(optarg,&arg_dst);
 				break;
 			case 'o': //destination port
-				arg_port = atoi(optarg);
+				//arg_port = atoi(optarg);
 				break;
 			case 'r': //opus bitrate
-				arg_bitrate = atoi(optarg);
+				//arg_bitrate = atoi(optarg);
 				break;
 			case 's': //Percentage Packetloss
-				arg_packetloss = atoi(optarg);
+				//arg_packetloss = atoi(optarg);
 				break;
 			case 'g': //packets in page size
-				arg_pagesize = atoi(optarg);
+				//arg_pagesize = atoi(optarg);
 				break;
 			case 'l': //Audio Devices
 				Pa_Initialize();
@@ -456,9 +599,9 @@ int main(int argc,char *argv[]) {
 	printOptions();
 
 	encodedBuffer=(unsigned char *)calloc(sizeof(unsigned char),ENCODED_BUFFER_SIZE);
-	txbuffer=(unsigned char *)calloc(sizeof(unsigned char),TXBUFFER_SIZE);
+	txBuffer=(unsigned char *)calloc(sizeof(unsigned char),TXBUFFER_SIZE);
 
-	setupSocket();
+	//setupSocket();
 	setupAppControlSocket();
 
 	memset(&inputParameters,0,sizeof(PaStreamParameters));
@@ -491,13 +634,13 @@ int main(int argc,char *argv[]) {
 
 	pthread_create(&control_thread_id,NULL,&control_thread_function,NULL) ;
 	//oe=opus_encoder_create(SAMPLE_RATE,2,OPUS_APPLICATION_RESTRICTED_LOWDELAY,&oeErr);
-	oe=opus_encoder_create(SAMPLE_RATE,2,OPUS_APPLICATION_AUDIO,&oeErr);
-	oerr=opus_encoder_ctl(oe,OPUS_SET_PACKET_LOSS_PERC(arg_packetloss));
-	oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
+	//oe=opus_encoder_create(SAMPLE_RATE,2,OPUS_APPLICATION_AUDIO,&oeErr);
+	//oerr=opus_encoder_ctl(oe,OPUS_SET_PACKET_LOSS_PERC(arg_packetloss));
+	//oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
 
 	//opus_encoder_init(oe,SAMPLE_RATE,2,OPUS_APPLICATION_RESTRICTED_LOWDELAY);
-	opus_encoder_init(oe,SAMPLE_RATE,2,OPUS_APPLICATION_AUDIO);
-	ogg_stream_init(&os,arg_streamSerial);	
+	//opus_encoder_init(oe,SAMPLE_RATE,2,OPUS_APPLICATION_AUDIO);
+	//ogg_stream_init(&os,arg_streamSerial);	
 
 	log_info("Preparing to start Stream...");
 	err = Pa_StartStream(stream);
@@ -515,15 +658,15 @@ int main(int argc,char *argv[]) {
 				break;
 			case '_':
 			case '-':
-				arg_bitrate-=1000;
-				log_info("Opus Bitrate:			%u",arg_bitrate) ;
-				oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
+				//arg_bitrate-=1000;
+				//log_info("Opus Bitrate:			%u",arg_bitrate) ;
+				//oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
 				break;
 			case '=':
 			case '+':
-				arg_bitrate+=1000;
-				log_info("Opus Bitrate:			%u",arg_bitrate) ;
-				oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
+				//arg_bitrate+=1000;
+				//log_info("Opus Bitrate:			%u",arg_bitrate) ;
+				//oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
 				break;
 			case 'o':
 				printOptions();
@@ -538,8 +681,8 @@ error:
 }
 
 void cleanup() {
-	ogg_stream_destroy(&os);
-	opus_encoder_destroy(oe);
+	//ogg_stream_destroy(&os);
+	//opus_encoder_destroy(oe);
 	Pa_CloseStream(stream);
 	Pa_Terminate();
 	system("/bin/stty cooked");
@@ -547,11 +690,11 @@ void cleanup() {
 
 void printOptions() {
 	log_info("Frames Per Buffer:	%u",arg_framesPerBuffer) ;
-	log_info("Opus Bitrate:		%u",arg_bitrate) ;
-	log_info("Packet Loss:		%u",arg_packetloss) ;
-	log_info("Page Size:		%u",arg_pagesize) ;
+	//log_info("Opus Bitrate:		%u",arg_bitrate) ;
+	//log_info("Packet Loss:		%u",arg_packetloss) ;
+	//log_info("Page Size:		%u",arg_pagesize) ;
 	log_info("Device Name:		%s",Pa_GetDeviceInfo(arg_device)->name) ;
 	log_info("Stream Serial:	%u",arg_streamSerial);
-	log_info("Destination IP:	%s",inet_ntoa(arg_dst));
-	log_info("Destination Port:	%u",arg_port );
+	//log_info("Destination IP:	%s",inet_ntoa(arg_dst));
+	//log_info("Destination Port:	%u",arg_port );
 }

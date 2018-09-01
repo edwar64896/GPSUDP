@@ -21,7 +21,7 @@ OBJ_rx-ogg = $(patsubst %,$(ODIR)/%,$(_OBJ_rx-ogg))
 _OBJ_ctl = gsp-ctl.o  log.o
 OBJ_ctl = $(patsubst %,$(ODIR)/%,$(_OBJ_ctl))
 
-_OBJ_tx-net = gsp-opus-tx-net.o  log.o
+_OBJ_tx-net = gsp-opus-tx-net.o  log.o timef.o
 OBJ_tx-net = $(patsubst %,$(ODIR)/%,$(_OBJ_tx-net))
 
 _OBJ_tx-ogg = gsp-opus-tx-ogg.o  log.o

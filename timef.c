@@ -2,6 +2,13 @@
 #include <time.h>
 #include "timef.h"
 
+uint64_t getSecondsSinceMidnight(struct tm * tm) {
+	uint64_t rc=
+		(tm->tm_sec 		+
+		 (tm->tm_min * 60)	+
+		 (tm->tm_hour * 3600));
+	return rc;
+}
 struct timespec * timespec_diff(struct timespec *start, struct timespec *stop, struct timespec *result)
 {
 				if ((stop->tv_nsec - start->tv_nsec) < 0) {
