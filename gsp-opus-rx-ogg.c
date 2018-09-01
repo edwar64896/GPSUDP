@@ -17,10 +17,8 @@
 #include <time.h>
 #include <stdio.h>
 
-#include "gspudp.h"
 #include "portaudio.h"
 #include "pa_ringbuffer.h"
-#include "uthash.h"
 #include "log.h"
 #include "ma.h"
 #include "timef.h"
