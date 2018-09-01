@@ -61,4 +61,4 @@ ctl: gsp-ctl
 .PHONY: clean
 
 clean:
-	rm -f $(ODIR)/*.o *~ core $(INCDIR)/*~  gsp-opus-rx-ogg
+	rm -f $(ODIR)/*.o *~ core $(INCDIR)/*~  gsp-opus-rx-ogg gsp-opus-tx-net gsp-ctl

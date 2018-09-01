@@ -319,18 +319,10 @@ control_removeTxDest(struct txDest ** llist, struct txDest * td) {
 	}
 
 	ogg_stream_clear(&td->os);
-	log_debug("done with ogg_stream_clear");
 	opus_encoder_destroy(td->oe);
-	log_debug("done with opus_encoder_destroy");
 
 	free(td->txBuffer);
-	log_debug("done freeing txbuffer");
 	free(td->encodedBuffer);
-	log_debug("done freeing encode buffer");
-
-	// this is causing an error.
-	//ogg_stream_destroy(&td->os);
-	//log_debug("done with ogg_stream_destroy");
 
 	free(td);
 	log_debug("done freeing Dest Structure");
