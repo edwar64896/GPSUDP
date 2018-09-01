@@ -41,7 +41,7 @@ clktest: $(OBJ_clktest)
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS3)
 
 gsp-ctl: $(OBJ_ctl)
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS3)
 
 gsp-opus-tx-net: $(OBJ_tx-net)
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS_tx)
