@@ -5,7 +5,8 @@ CFLAGS=-I../include -Iportaudio/include -O3 -march=native -Rpass-analysis=loop-v
 ODIR=obj
 LDIR =../lib
 
-LIBS=-lm -lportaudio -lopus -logg -lpthread   -lsamplerate -lncurses
+LIBS_tx=-lm -lportaudio -lopus -logg -lpthread  
+LIBS_rx=-lm -lportaudio -lopus -logg -lpthread -lsamplerate
 LIBS3=-lm -lportaudio -lopus -logg -lpthread  
 
 _DEPS =
@@ -34,7 +35,7 @@ $(ODIR)/%.o: %.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 gsp-opus-rx-ogg: $(OBJ_rx-ogg)
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS_rx)
 
 clktest: $(OBJ_clktest)
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS3)
@@ -43,13 +44,13 @@ gsp-ctl: $(OBJ_ctl)
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
 
 gsp-opus-tx-net: $(OBJ_tx-net)
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS_tx)
 
 gsp-opus-tx-ogg: $(OBJ_tx-ogg)
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS_tx)
 
 gsp-opus-tx: $(OBJ_tx)
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS_tx)
 
 rx: gsp-opus-rx-ogg
 

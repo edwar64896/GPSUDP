@@ -15,7 +15,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <pthread.h>
-#include "gspudp.h"
+
 #include "log.h"
 #include "portaudio.h"
 
