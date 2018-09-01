@@ -83,8 +83,9 @@ struct ip_mreq mreq;
 struct hashable_ogg_stream_state {
 				int id; //key // ogg serial number (yeah its in os, but...)
 				int seq; //sequence of the stream (for display purposes)
-				ogg_stream_state os; //stream state (ogg)
 				int frames_per_buffer; //number of frames
+				int active; // 1 when stream is being read. use this to help discard some of the initial ringbuffer at the start.
+				ogg_stream_state os; //stream state (ogg)
 				PaUtilRingBuffer rBuf; //ringbuffer structure
 				uint32_t rBufSpace; //??
 				pthread_mutex_t	page_mutex;
@@ -112,6 +113,7 @@ struct hashable_ogg_stream_state *initStreams () {
 														// the stream connects from the server
 								(s+i)->seq=i; //sequence - display primarily
 								(s+i)->ratio=1; 
+								(s+i)->active=0;
 								(s+i)->frames_per_buffer=FRAMES_PER_BUFFER;
 
 								/* 
@@ -281,8 +283,6 @@ void checkStreams() {
 				struct timespec ts,td;
 				struct hashable_ogg_stream_state * s=streams;
 
-				log_info("checking streams for currency");
-
 				clock_gettime(CLOCK_REALTIME,&ts);
 
 				for (int j=0;j<N_STREAM_STRUCTURES;j++) {
@@ -326,8 +326,8 @@ movingAveragePageTime(struct hashable_ogg_stream_state * oss, uint64_t granulepo
 				} else {
 								oss->ratio = (10 * packetsInPage)/oss->timing; //20ms because it's 2 packets per page (fixed)
 				}
-
 }
+
 void punchPacket(struct hashable_ogg_stream_state *oss) {
 				int oerr;
 				int opus_err;
@@ -435,12 +435,9 @@ static void * network_thread_function(void * args) {
 
 								rc=select (sock+1,&rfds,NULL,NULL,&to);
 
-								//rc=poll (fds,1,1000); //poll not on osx
-
 								cnt = recvfrom(sock, receiveBuffer, RECEIVE_BUFFER_SIZE, 0, (struct sockaddr *) &addr, &addrlen);
 
 								if (cnt==-1) {
-												log_debug("socket timeout");
 												checkStreams(); // check to see if any streams are no longer transmitting. If so, kill them off.
 												continue;
 								}
@@ -527,6 +524,10 @@ void mixAudio(paSample * outputBuffer, float gain) {
 				//#pragma clang loop vectorize(enable)
 				for (j=0;j<N_STREAM_STRUCTURES;j++) {
 								if ((s+j)->id==0) continue;
+								if (!(s+j)->active) {
+									PaUtil_FlushRingBuffer(&(s+j)->rBuf);
+									(s+j)->active=1;
+								}
 								pthread_mutex_lock(&(s+j)->packet_mutex);
 								PaUtil_ReadRingBuffer(&(s+j)->rBuf,(s+j)->mixbuf,FRAMES_PER_BUFFER_PAOUT);
 
@@ -660,14 +661,3 @@ error:
 				exit(0);
 
 }
-
-/*
-
-	 if (ncurses) {
-	 int a=(s+j)->rBufSpace/240;
-	 move (j+1,5);
-	 printw("serial: %u",(s+j)->id);
-	 move (j+1,22+a);
-	 printw(" > ");
-	 }
- */
