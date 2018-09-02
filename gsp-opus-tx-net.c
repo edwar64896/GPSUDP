@@ -57,7 +57,6 @@ typedef void sigfunc(int);
 
 int arg_pagesize=OGG_PAGESIZE;
 int arg_device=PA_DEVICE;
-int arg_framesPerBuffer=FRAMES_PER_BUFFER;
 int arg_bitrate=OPUS_BITRATE;
 int arg_packetloss=OPUS_PACKETLOSS;
 int arg_verbose=0;
@@ -468,7 +467,6 @@ static int paCallback( const void *inputBuffer, void *outputBuffer,
 				paCallbackRunning=1;
 				ssm=callbackTime;
 				ssmSamples=callbackTime*SAMPLE_RATE;
-				log_info("Stream Transmitting....");
 			} else
 				return 0;
 		}
@@ -527,7 +525,7 @@ void displayHelp() {
 	printf("-o <port>	Destination PORT\n");
 	printf("-f <frames>	Frames Per Buffer\n");
 	printf("-r <bitrate>	Opus Bitrate\n");
-	printf("-s <%pkt loss>	Percentage Packet Loss\n");
+	printf("-s <%%pkt loss>	Percentage Packet Loss\n");
 	printf("-g <packets>	Opus Packets Per Ogg Page\n");
 }
 
@@ -545,31 +543,13 @@ int main(int argc,char *argv[]) {
 
 	//inet_aton(MC_GROUP,&arg_dst); // destination IP. we use strncpy to avoid buffer overrun.
 
-	while ((opt = getopt(argc, argv, "hlf:d:o:e:g:r:s:t:")) != -1) {
+	while ((opt = getopt(argc, argv, "hld:e:")) != -1) {
 		switch (opt) {
 			case 'e': //Stream Serial number 
 				arg_streamSerial = atoi(optarg);
 				break;
-			case 'f': //Frames Per Buffer 
-				arg_framesPerBuffer = atoi(optarg);
-				break;
 			case 'd': //device ID
 				arg_device = atoi(optarg);
-				break;
-			case 't': //destination ip
-				//inet_aton(optarg,&arg_dst);
-				break;
-			case 'o': //destination port
-				//arg_port = atoi(optarg);
-				break;
-			case 'r': //opus bitrate
-				//arg_bitrate = atoi(optarg);
-				break;
-			case 's': //Percentage Packetloss
-				//arg_packetloss = atoi(optarg);
-				break;
-			case 'g': //packets in page size
-				//arg_pagesize = atoi(optarg);
 				break;
 			case 'l': //Audio Devices
 				Pa_Initialize();
@@ -593,11 +573,13 @@ int main(int argc,char *argv[]) {
 	encodedBuffer=(unsigned char *)calloc(sizeof(unsigned char),ENCODED_BUFFER_SIZE);
 	txBuffer=(unsigned char *)calloc(sizeof(unsigned char),TXBUFFER_SIZE);
 
-	//setupSocket();
 	setupAppControlSocket();
 
+
+	log_info("App Control Socket Available");
 	memset(&inputParameters,0,sizeof(PaStreamParameters));
 	memset(&outputParameters,0,sizeof(PaStreamParameters));
+	log_info("Pa Params Cleared");
 
 	/* -- setup input and output -- */
 	inputParameters.device = arg_device;
@@ -610,55 +592,38 @@ int main(int argc,char *argv[]) {
 	outputParameters.sampleFormat = PA_SAMPLE_TYPE;
 	outputParameters.suggestedLatency = Pa_GetDeviceInfo( outputParameters.device )->defaultLowInputLatency ;
 	outputParameters.hostApiSpecificStreamInfo = NULL;
+	
+	log_info("Pa Params Populated");
 	/* -- setup stream -- */
 	err = Pa_OpenStream(
 			&stream,
 			&inputParameters,
-			&outputParameters,
-			//	NULL,
+			NULL,
 			SAMPLE_RATE,
-			arg_framesPerBuffer,
+			FRAMES_PER_BUFFER,
 			paClipOff,      /* we won't output out of range samples so don't bother clipping them */
 			paCallback, /* no callback, use blocking API */
 			NULL ); /* no callback, so no callback userData */
+
+	log_debug("Pa_OpenStream error %u",err);
+
 	if( err != paNoError ) goto error;
 	/* Open an audio I/O stream. */
 
-	pthread_create(&control_thread_id,NULL,&control_thread_function,NULL) ;
-	//oe=opus_encoder_create(SAMPLE_RATE,2,OPUS_APPLICATION_RESTRICTED_LOWDELAY,&oeErr);
-	//oe=opus_encoder_create(SAMPLE_RATE,2,OPUS_APPLICATION_AUDIO,&oeErr);
-	//oerr=opus_encoder_ctl(oe,OPUS_SET_PACKET_LOSS_PERC(arg_packetloss));
-	//oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
+	log_debug ("Audio Stream Open");
 
-	//opus_encoder_init(oe,SAMPLE_RATE,2,OPUS_APPLICATION_RESTRICTED_LOWDELAY);
-	//opus_encoder_init(oe,SAMPLE_RATE,2,OPUS_APPLICATION_AUDIO);
-	//ogg_stream_init(&os,arg_streamSerial);	
+	pthread_create(&control_thread_id,NULL,&control_thread_function,NULL) ;
 
 	log_info("Preparing to start Stream...");
 	err = Pa_StartStream(stream);
 	if (err != paNoError) goto error;
 
-
 	while (1) {
-		//system("/bin/stty raw");
 		c=getchar();
-		//system("/bin/stty cooked");
 		switch (c) {
 			case 'q':
 				cleanup();
 				exit(0);
-				break;
-			case '_':
-			case '-':
-				//arg_bitrate-=1000;
-				//log_info("Opus Bitrate:			%u",arg_bitrate) ;
-				//oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
-				break;
-			case '=':
-			case '+':
-				//arg_bitrate+=1000;
-				//log_info("Opus Bitrate:			%u",arg_bitrate) ;
-				//oerr=opus_encoder_ctl(oe,OPUS_SET_BITRATE(arg_bitrate));
 				break;
 			case 'o':
 				printOptions();
@@ -681,12 +646,6 @@ void cleanup() {
 }
 
 void printOptions() {
-	log_info("Frames Per Buffer:	%u",arg_framesPerBuffer) ;
-	//log_info("Opus Bitrate:		%u",arg_bitrate) ;
-	//log_info("Packet Loss:		%u",arg_packetloss) ;
-	//log_info("Page Size:		%u",arg_pagesize) ;
 	log_info("Device Name:		%s",Pa_GetDeviceInfo(arg_device)->name) ;
 	log_info("Stream Serial:	%u",arg_streamSerial);
-	//log_info("Destination IP:	%s",inet_ntoa(arg_dst));
-	//log_info("Destination Port:	%u",arg_port );
 }
