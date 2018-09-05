@@ -14,6 +14,7 @@ struct ma {
 				uint64_t elementTotal;
 				uint64_t * elementArray;
 };
+int ma_init(struct ma * ma) ;
 double ma_avg(struct ma * ma) ;
 void ma_reset(struct ma * ma) ;
 int ma_constrain(struct ma * ma, double percentage, uint64_t element) ;

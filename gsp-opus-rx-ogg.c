@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <unistd.h>
+#include <signal.h>
 #include <poll.h>
 #include <errno.h>
 #include <time.h>
