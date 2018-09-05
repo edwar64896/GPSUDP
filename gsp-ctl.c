@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "log.h"
+#include "timef.h"
 
 #define MC_PORT 49876
 #define CONTROL_PORT MC_PORT+1
@@ -73,13 +74,42 @@ receive_parseMessage(char * buf,int bufSize, int * pnArgs,char *(*pArgs)[]) {
 	(*pnArgs)=nArgs;
 }
 
+void receive_timesync(int nArgs, char *(*pArgs)[],char * sender) {
+	struct timespec tp;
+	uint64_t	ttm;
+
+	clock_gettime(CLOCK_REALTIME,&tp);
+	ttm=timespec_to_uint64(&tp);
+
+	uint64_t ttm_in=strtoll((*pArgs)[1],NULL,10);
+	int64_t tdiff=(ttm-ttm_in);
+	double dtdiff=((double)tdiff)/1000000.0;
+	log_info("Timesync difference of %s is %F ms",sender,dtdiff);
+	
+}
+
+struct receive_cmd {
+	const char * cmd;
+	void (*cmd_fn)(int,char *(*)[],char*);
+};
+
+struct receive_cmd receive_cmds[]={
+
+	{"TIMESYNC",receive_timesync}
+};
+
+int receive_cmds_size=1;
+
 void
 receive_processMessage(int nArgs,char *(*pArgs)[],char * sender) {
 	if (nArgs==0)
 		return;
-	if (nArgs==1) {
-		if (strcmp((*pArgs)[0],"HELLOFROM")==0) {
-			//processHelloFrom(sender);
+
+	//log_debug("processing message from %s",sender);
+
+	for (int i=0;i<receive_cmds_size;i++) {
+		if (strcmp((*pArgs)[0],receive_cmds[i].cmd)==0) {
+			(*receive_cmds[i].cmd_fn)(nArgs,pArgs,sender);
 		}
 	}
 }
@@ -108,18 +138,17 @@ void * receive_thread_function(void * args) {
 
 		rc=select(control_sock+1,&rfds,NULL,NULL,&to);
 		memset(control_receive_buffer,0,CONTROL_RECEIVE_BUFFER_SIZE);
-		cnt=recvfrom(control_sock,control_receive_buffer,CONTROL_RECEIVE_BUFFER_SIZE,0,(struct sockaddr *
-					) &control_addr, &control_addrlen);
+		cnt=recvfrom(control_sock,control_receive_buffer,CONTROL_RECEIVE_BUFFER_SIZE,0,(struct sockaddr *) &control_addr, &control_addrlen);
 		if (cnt==-1) {
 			continue;
 		}
-		log_info("Packet Received:%s from %s",control_receive_buffer,inet_ntoa(control_addr.sin_addr));
+		//log_info("Packet Received:%s from %s",control_receive_buffer,inet_ntoa(control_addr.sin_addr));
 		receive_parseMessage(control_receive_buffer,cnt,&nArgs,&Args);
-		log_info("Number of Commands/Parameters in packet: %u",nArgs);
+		//log_info("Number of Commands/Parameters in packet: %u",nArgs);
 		for (int i=0;i<nArgs;i++) {
-			log_info("Command %u is %s len %u",i,Args[i],strlen(Args[i]));
+			//log_info("Command %u is %s len %u",i,Args[i],strlen(Args[i]));
 		}
-		log_info("inside control_thread_function with %0x",Args);
+		//log_info("inside control_thread_function with %0x",Args);
 		receive_processMessage(nArgs,&Args,inet_ntoa(control_addr.sin_addr));
 	}
 }

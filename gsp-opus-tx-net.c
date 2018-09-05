@@ -521,12 +521,6 @@ void displayHelp() {
 	printf("-l		List Devices\n");
 	printf("-e <serial>	Stream Serial Number\n");
 	printf("-d <device>	Device ID\n");
-	printf("-t <dest>	Destination IP\n");
-	printf("-o <port>	Destination PORT\n");
-	printf("-f <frames>	Frames Per Buffer\n");
-	printf("-r <bitrate>	Opus Bitrate\n");
-	printf("-s <%%pkt loss>	Percentage Packet Loss\n");
-	printf("-g <packets>	Opus Packets Per Ogg Page\n");
 }
 
 int main(int argc,char *argv[]) {

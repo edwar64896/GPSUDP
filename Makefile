@@ -18,7 +18,7 @@ OBJ_clktest = $(patsubst %,$(ODIR)/%,$(_OBJ_clktest))
 _OBJ_rx-ogg = gsp-opus-rx-ogg.o  pa_ringbuffer.o log.o ma.o timef.o
 OBJ_rx-ogg = $(patsubst %,$(ODIR)/%,$(_OBJ_rx-ogg))
 
-_OBJ_ctl = gsp-ctl.o  log.o
+_OBJ_ctl = gsp-ctl.o  log.o timef.o
 OBJ_ctl = $(patsubst %,$(ODIR)/%,$(_OBJ_ctl))
 
 _OBJ_tx-net = gsp-opus-tx-net.o  log.o timef.o
